@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.vscode/
+data/stockvision.db
+data/stock_data.csv
+.env
