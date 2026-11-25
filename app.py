@@ -96,12 +96,14 @@ with tab2:
                 r = get_prediction(ticker)
                                  
                 save_prediction(r)
-            p1, p2, p3 = st.columns(3)
+            p1, p2, p3, p4 = st.columns(4)
             arrow = "📈" if r["trend"] == "UP" else "📉"
             p1.metric("Predicted price", f"₹{r['pred_price']:.2f}",
                       f"{r['pred_return_pct']:+.2f}%")
             p2.metric("Trend", f"{arrow} {r['trend']}")
             p3.metric("Signal strength", r["signal"])
+            p4.metric("UP probability", f"{r['prob_up']*100:.0f}%")
+            st.caption("Run this after the US market closes (night) or before 9:15 AM IST, because the model uses the US overnight move.")
             st.write(f"**Expected range:** ₹{r['low']:.2f} to ₹{r['high']:.2f}")
             st.warning(
                 "Next-day stock movement is highly random. The signal will be 'Weak' "
