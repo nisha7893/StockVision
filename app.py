@@ -13,6 +13,7 @@ from predict import predict_next_day
 from db import save_prediction, save_prices, update_actuals, load_predictions
 from backtest import run_backtest
 from explain import explain
+from security import validate_ticker, rate_limited, log
 
 st.set_page_config(page_title="StockVision", page_icon="📈", layout="wide")
 st.title("📈 StockVision")
@@ -31,6 +32,11 @@ def get_prediction(ticker):
     return predict_next_day(ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_explanation(ticker):
+    return explain(ticker)
+
+
 # ---------- Sidebar ----------
 with st.sidebar:
     st.header("Select a stock")
@@ -41,6 +47,26 @@ with st.sidebar:
     ).strip().upper()
     st.info("Educational purpose only, not financial advice.")
 
+# ---------- Security: validate input ----------
+clean = validate_ticker(ticker)
+if clean is None:
+    log.warning("rejected ticker input: %r", ticker[:50])
+    st.error("Invalid ticker. Use only letters, digits and . - & ^ (max 20 characters).")
+    st.stop()
+ticker = clean
+
+with st.sidebar.expander("🔒 Security & Privacy"):
+    st.markdown(
+        "- No login and no personal data collected\n"
+        "- Only public market data is used (Yahoo Finance)\n"
+        "- Ticker input is validated with an allow-list pattern\n"
+        "- Database queries are parameterised (no SQL injection)\n"
+        "- Rate limit on predictions per session\n"
+        "- Error details are logged, not shown to the user\n"
+        "- No API keys or secrets in the code\n"
+        "- Usage telemetry is switched off"
+    )
+
 # ---------- Data ----------
 try:
     with st.spinner("Fetching data..."):
@@ -49,7 +75,8 @@ try:
         st.error("Not enough data or invalid ticker. Example: TCS.NS")
         st.stop()
 except Exception as e:
-    st.error(f"Could not fetch data: {e}")
+    log.warning("data fetch failed for %s: %s", ticker, e)
+    st.error("Could not fetch data for this ticker. Please check the symbol (NSE stocks need .NS).")
     st.stop()
 
 last = df.iloc[-1]
@@ -63,7 +90,8 @@ c2.metric("Day High", f"₹{last['High']:.2f}")
 c3.metric("Day Low", f"₹{last['Low']:.2f}")
 c4.metric("Volume", f"{int(last['Volume']):,}")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Price Chart", "🔮 Prediction", "🧪 Model Comparison", "💰 Backtest", "📒 Tracker"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Price Chart", "🔮 Prediction", "🧪 Model Comparison", "💰 Backtest", "📒 Tracker"])
 
 # ---------- Tab 1: Chart ----------
 with tab1:
@@ -81,36 +109,58 @@ with tab1:
                                  name="MA20", line=dict(width=1.5)))
     fig.update_layout(height=520, xaxis_rangeslider_visible=False,
                       title=f"{ticker} - {tf} chart")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.caption("Last 5 periods")
     st.dataframe(data[["Close", "Return %"]].tail().round(2))
 
 # ---------- Tab 2: Prediction ----------
 with tab2:
-    st.write("Random Forest and Linear Regression are trained on this stock plus market data (S&P 500, Nifty, India VIX, USD/INR). This takes 5-10 seconds.")
-    
+    st.write("Random Forest and Linear Regression are trained on this stock plus market data "
+             "(S&P 500, Nifty, India VIX, USD/INR). This takes 5-10 seconds.")
+
     if st.button("Predict next day", type="primary"):
+        if rate_limited("predict_calls"):
+            st.error("Too many requests. Please wait a few minutes and try again.")
+        else:
+            try:
+                with st.spinner("Training models..."):
+                    r = get_prediction(ticker)
+                    save_prediction(r)
+                p1, p2, p3, p4 = st.columns(4)
+                arrow = "📈" if r["trend"] == "UP" else "📉"
+                p1.metric("Predicted price", f"₹{r['pred_price']:.2f}",
+                          f"{r['pred_return_pct']:+.2f}%")
+                p2.metric("Trend", f"{arrow} {r['trend']}")
+                p3.metric("Signal strength", r["signal"])
+                p4.metric("UP probability", f"{r['prob_up']*100:.0f}%")
+                st.caption("Run this after the US market closes (night) or before 9:15 AM IST, "
+                           "because the model uses the US overnight move.")
+                st.write(f"**Expected range:** ₹{r['low']:.2f} to ₹{r['high']:.2f}")
+                st.warning(
+                    "Next-day stock movement is highly random. The signal will be 'Weak' "
+                    "on most days, and that is normal. Do not treat this as trading advice."
+                )
+            except Exception as e:
+                log.warning("prediction failed for %s: %s", ticker, e)
+                st.error("Prediction failed for this ticker. Please try another symbol.")
+
+    st.divider()
+    st.subheader("🔍 Why this prediction?")
+    if st.checkbox("Show explanation"):
         try:
-            with st.spinner("Training models..."):
-                r = get_prediction(ticker)
-                                 
-                save_prediction(r)
-            p1, p2, p3, p4 = st.columns(4)
-            arrow = "📈" if r["trend"] == "UP" else "📉"
-            p1.metric("Predicted price", f"₹{r['pred_price']:.2f}",
-                      f"{r['pred_return_pct']:+.2f}%")
-            p2.metric("Trend", f"{arrow} {r['trend']}")
-            p3.metric("Signal strength", r["signal"])
-            p4.metric("UP probability", f"{r['prob_up']*100:.0f}%")
-            st.caption("Run this after the US market closes (night) or before 9:15 AM IST, because the model uses the US overnight move.")
-            st.write(f"**Expected range:** ₹{r['low']:.2f} to ₹{r['high']:.2f}")
-            st.warning(
-                "Next-day stock movement is highly random. The signal will be 'Weak' "
-                "on most days, and that is normal. Do not treat this as trading advice."
-            )
+            with st.spinner("Analysing indicators..."):
+                imp, notes = get_explanation(ticker)
+            st.write("**Current indicator readings**")
+            for n in notes:
+                st.write("- " + n)
+            st.write("**What the Random Forest model relies on most**")
+            st.bar_chart(imp.head(6))
+            st.caption("Importance shows which inputs the model used most while learning. "
+                       "It does not mean they cause the price to move.")
         except Exception as e:
-            st.error(f"Prediction failed: {e}")
+            log.warning("explanation failed for %s: %s", ticker, e)
+            st.error("Explanation is not available for this ticker.")
 
 # ---------- Tab 3: Model comparison ----------
 with tab3:
@@ -126,28 +176,57 @@ with tab3:
     else:
         st.warning("data/results.csv not found. Run `python src/lstm_model.py` first.")
 
+    st.divider()
+    st.subheader("Direction accuracy: price-only vs price + market features")
+    st.caption("5 stocks (Reliance, TCS, Infosys, HDFC Bank, ITC), 5-fold walk-forward "
+               "validation, next-day UP/DOWN.")
+    if os.path.exists("data/experiment_results.csv"):
+        ex = pd.read_csv("data/experiment_results.csv")
+        ex1 = ex[ex["Horizon"] == "1-day"]
+        summ = (ex1.groupby(["Features", "Model"])[["Acc", "AlwaysUP", "Edge"]]
+                .mean().round(2).reset_index())
+        summ.columns = ["Features", "Model", "Accuracy %", "Always-UP baseline %", "Edge (points)"]
+        st.dataframe(summ, hide_index=True)
+
+        st.write("**Edge over the Always-UP baseline, per stock (Random Forest)**")
+        per = (ex1[ex1["Model"] == "Random Forest"]
+               .groupby(["Ticker", "Features"])["Edge"].mean().unstack().round(2))
+        st.bar_chart(per)
+
+        st.info(
+            "Price-only features gave almost no edge over the baseline. Adding S&P 500, Nifty, "
+            "India VIX and USD/INR gave a small edge of about 2 to 3 points, positive on all "
+            "5 stocks. This is a small improvement, not a trading guarantee."
+        )
+    else:
+        st.warning("data/experiment_results.csv not found. Run `python src/experiment.py` first.")
+
 # ---------- Tab 4: Backtest ----------
 with tab4:
     st.write("What if you had followed this model's UP/DOWN signals with Rs 10,000? "
              "The model is trained on the first 80% of the data and tested on the last 20%, "
              "which it has never seen. A 0.1% cost is charged on every buy and sell.")
+    thr = st.slider("Sell only if the predicted drop is bigger than (%)", 0.0, 1.0, 0.0, 0.05)
     if st.button("Run backtest", type="primary"):
         try:
             with st.spinner("Running backtest..."):
                 curve, s = run_backtest(df, exit_threshold=thr / 100)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=curve["Date"], y=curve["Strategy"], name="Model strategy", line=dict(color="#ff7f0e")))
+            fig.add_trace(go.Scatter(x=curve["Date"], y=curve["Strategy"], name="Model strategy",
+                                     line=dict(color="#ff7f0e")))
             fig.add_trace(go.Scatter(x=curve["Date"], y=curve["Buy & Hold"], name="Buy & Hold"))
-            fig.update_layout(height=450, title=f"{ticker}: Rs 10,000 from {s['start']} to {s['end']}",
+            fig.update_layout(height=450,
+                              title=f"{ticker}: Rs 10,000 from {s['start']} to {s['end']}",
                               yaxis_title="Portfolio value (Rs)")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             b1, b2, b3, b4 = st.columns(4)
             b1.metric("Model strategy", f"Rs {s['strategy_final']:,.0f}",
                       f"{(s['strategy_final']/s['capital']-1)*100:+.1f}%")
             b2.metric("Buy & Hold", f"Rs {s['bh_final']:,.0f}",
                       f"{(s['bh_final']/s['capital']-1)*100:+.1f}%")
-            b3.metric("Worst drop (strategy)", f"{s['strategy_dd']:.1f}%", f"Buy & Hold: {s['bh_dd']:.1f}%", delta_color="off")
+            b3.metric("Worst drop (strategy)", f"{s['strategy_dd']:.1f}%",
+                      f"Buy & Hold: {s['bh_dd']:.1f}%", delta_color="off")
             b4.metric("Trades made", s["trades"])
 
             if s["strategy_final"] > s["bh_final"]:
@@ -157,7 +236,8 @@ with tab4:
                         "and it shows how hard it is to beat the market with price data alone.")
             st.caption("Past performance does not guarantee future results. Educational purpose only.")
         except Exception as e:
-            st.error(f"Backtest failed: {e}")
+            log.warning("backtest failed for %s: %s", ticker, e)
+            st.error("Backtest failed for this ticker. Please try another symbol.")
 
 # ---------- Tab 5: Prediction Tracker ----------
 with tab5:
@@ -169,7 +249,8 @@ with tab5:
                 n = update_actuals()
             st.success(f"{n} prediction(s) updated.")
         except Exception as e:
-            st.error(f"Update failed: {e}")
+            log.warning("tracker update failed: %s", e)
+            st.error("Could not update results right now. Please try again later.")
 
     hist = load_predictions()
     if hist.empty:
@@ -182,78 +263,3 @@ with tab5:
         else:
             st.info("Predictions are saved. They can be graded after the next trading day.")
         st.dataframe(hist.round(2), hide_index=True)
-
-# ---------- Explainer (inside the Prediction tab) ----------
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_explanation(ticker):
-    return explain(ticker)
-
-
-with tab2:
-    st.divider()
-    st.subheader("🔍 Why this prediction?")
-    if st.checkbox("Show explanation"):
-        try:
-            with st.spinner("Analysing indicators..."):
-                imp, notes = get_explanation(ticker)
-            st.write("**Current indicator readings**")
-            for n in notes:
-                st.write("- " + n)
-            st.write("**What the Random Forest model relies on most**")
-            st.bar_chart(imp.head(6))
-            st.caption("Importance shows which inputs the model used most while learning. "
-                       "It does not mean they cause the price to move.")
-        except Exception as e:
-            st.error(f"Explanation failed: {e}")
-
-# ---------- Model Comparison: market-wide features ----------
-with tab3:
-    st.divider()
-    st.subheader("Direction accuracy: price-only vs price + market features")
-    st.caption("5 stocks (Reliance, TCS, Infosys, HDFC Bank, ITC), 5-fold walk-forward validation, next-day UP/DOWN.")
-    if os.path.exists("data/experiment_results.csv"):
-        ex = pd.read_csv("data/experiment_results.csv")
-        ex1 = ex[ex["Horizon"] == "1-day"]
-        summ = (ex1.groupby(["Features", "Model"])[["Acc", "AlwaysUP", "Edge"]]
-                .mean().round(2).reset_index())
-        summ.columns = ["Features", "Model", "Accuracy %", "Always-UP baseline %", "Edge (points)"]
-        st.dataframe(summ, hide_index=True)
-
-        st.write("**Edge over the Always-UP baseline, per stock (Random Forest)**")
-        per = (ex1[ex1["Model"] == "Random Forest"]
-               .groupby(["Ticker", "Features"])["Edge"].mean().unstack().round(2))
-        st.bar_chart(per)
-
-        st.info(
-            "Price-only features gave almost no edge over the baseline. Adding S&P 500, Nifty, "
-            "India VIX and USD/INR gave a small edge of about 2 to 3 points, positive on all 5 stocks. "
-            "This is a small improvement, not a trading guarantee."
-        )
-    else:
-        st.warning("data/experiment_results.csv not found. Run `python src/experiment.py` first.")
-
-# ---------- Model Comparison: market-wide features ----------
-with tab3:
-    st.divider()
-    st.subheader("Direction accuracy: price-only vs price + market features")
-    st.caption("5 stocks (Reliance, TCS, Infosys, HDFC Bank, ITC), 5-fold walk-forward validation, next-day UP/DOWN.")
-    if os.path.exists("data/experiment_results.csv"):
-        ex = pd.read_csv("data/experiment_results.csv")
-        ex1 = ex[ex["Horizon"] == "1-day"]
-        summ = (ex1.groupby(["Features", "Model"])[["Acc", "AlwaysUP", "Edge"]]
-                .mean().round(2).reset_index())
-        summ.columns = ["Features", "Model", "Accuracy %", "Always-UP baseline %", "Edge (points)"]
-        st.dataframe(summ, hide_index=True)
-
-        st.write("**Edge over the Always-UP baseline, per stock (Random Forest)**")
-        per = (ex1[ex1["Model"] == "Random Forest"]
-               .groupby(["Ticker", "Features"])["Edge"].mean().unstack().round(2))
-        st.bar_chart(per)
-
-        st.info(
-            "Price-only features gave almost no edge over the baseline. Adding S&P 500, Nifty, "
-            "India VIX and USD/INR gave a small edge of about 2 to 3 points, positive on all 5 stocks. "
-            "This is a small improvement, not a trading guarantee."
-        )
-    else:
-        st.warning("data/experiment_results.csv not found. Run `python src/experiment.py` first.")

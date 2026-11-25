@@ -5,3 +5,4 @@ __pycache__/
 data/stockvision.db
 data/stock_data.csv
 .env
+data/app.log
