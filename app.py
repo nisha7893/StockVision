@@ -88,8 +88,8 @@ with tab1:
 
 # ---------- Tab 2: Prediction ----------
 with tab2:
-    st.write("Linear Regression and Random Forest are trained on the selected stock. This takes 5-10 seconds.")
-    thr = st.slider("Sell only if the predicted drop is bigger than (%)", 0.0, 1.0, 0.0, 0.05)
+    st.write("Random Forest and Linear Regression are trained on this stock plus market data (S&P 500, Nifty, India VIX, USD/INR). This takes 5-10 seconds.")
+    
     if st.button("Predict next day", type="primary"):
         try:
             with st.spinner("Training models..."):
@@ -114,7 +114,7 @@ with tab2:
 
 # ---------- Tab 3: Model comparison ----------
 with tab3:
-    st.write("Comparison of all models on the Reliance test data:")
+    st.write("Price-only models on Reliance (single test period, next-day price/return):")
     if os.path.exists("data/results.csv"):
         res = pd.read_csv("data/results.csv")
         st.dataframe(res.round(2), hide_index=True)
@@ -205,3 +205,55 @@ with tab2:
                        "It does not mean they cause the price to move.")
         except Exception as e:
             st.error(f"Explanation failed: {e}")
+
+# ---------- Model Comparison: market-wide features ----------
+with tab3:
+    st.divider()
+    st.subheader("Direction accuracy: price-only vs price + market features")
+    st.caption("5 stocks (Reliance, TCS, Infosys, HDFC Bank, ITC), 5-fold walk-forward validation, next-day UP/DOWN.")
+    if os.path.exists("data/experiment_results.csv"):
+        ex = pd.read_csv("data/experiment_results.csv")
+        ex1 = ex[ex["Horizon"] == "1-day"]
+        summ = (ex1.groupby(["Features", "Model"])[["Acc", "AlwaysUP", "Edge"]]
+                .mean().round(2).reset_index())
+        summ.columns = ["Features", "Model", "Accuracy %", "Always-UP baseline %", "Edge (points)"]
+        st.dataframe(summ, hide_index=True)
+
+        st.write("**Edge over the Always-UP baseline, per stock (Random Forest)**")
+        per = (ex1[ex1["Model"] == "Random Forest"]
+               .groupby(["Ticker", "Features"])["Edge"].mean().unstack().round(2))
+        st.bar_chart(per)
+
+        st.info(
+            "Price-only features gave almost no edge over the baseline. Adding S&P 500, Nifty, "
+            "India VIX and USD/INR gave a small edge of about 2 to 3 points, positive on all 5 stocks. "
+            "This is a small improvement, not a trading guarantee."
+        )
+    else:
+        st.warning("data/experiment_results.csv not found. Run `python src/experiment.py` first.")
+
+# ---------- Model Comparison: market-wide features ----------
+with tab3:
+    st.divider()
+    st.subheader("Direction accuracy: price-only vs price + market features")
+    st.caption("5 stocks (Reliance, TCS, Infosys, HDFC Bank, ITC), 5-fold walk-forward validation, next-day UP/DOWN.")
+    if os.path.exists("data/experiment_results.csv"):
+        ex = pd.read_csv("data/experiment_results.csv")
+        ex1 = ex[ex["Horizon"] == "1-day"]
+        summ = (ex1.groupby(["Features", "Model"])[["Acc", "AlwaysUP", "Edge"]]
+                .mean().round(2).reset_index())
+        summ.columns = ["Features", "Model", "Accuracy %", "Always-UP baseline %", "Edge (points)"]
+        st.dataframe(summ, hide_index=True)
+
+        st.write("**Edge over the Always-UP baseline, per stock (Random Forest)**")
+        per = (ex1[ex1["Model"] == "Random Forest"]
+               .groupby(["Ticker", "Features"])["Edge"].mean().unstack().round(2))
+        st.bar_chart(per)
+
+        st.info(
+            "Price-only features gave almost no edge over the baseline. Adding S&P 500, Nifty, "
+            "India VIX and USD/INR gave a small edge of about 2 to 3 points, positive on all 5 stocks. "
+            "This is a small improvement, not a trading guarantee."
+        )
+    else:
+        st.warning("data/experiment_results.csv not found. Run `python src/experiment.py` first.")
