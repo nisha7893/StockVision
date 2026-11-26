@@ -15,7 +15,9 @@ def predict_next_day(ticker):
         raise ValueError("Not enough data or invalid ticker. For NSE stocks add .NS, e.g. TCS.NS")
 
     data = add_market(add_features(df))
-    today = data.iloc[[-1]][ALL_COLS].fillna(0)
+    today = data.iloc[[-1]][ALL_COLS]
+    if today.isna().values.any():
+        raise ValueError("Latest market data is incomplete. Please try again later.")
     train = data.dropna(subset=ALL_COLS + ["Target_Return"])
     X = train[ALL_COLS]
     y = train["Target_Return"]
@@ -35,7 +37,7 @@ def predict_next_day(ticker):
     pred_price = last_close * (1 + pred_ret)
 
     edge = abs(prob_up - 0.5)
-    signal = "Weak" if edge < 0.03 else "Moderate" if edge < 0.08 else "Strong"
+    signal = "No clear signal" if edge < 0.03 else "Moderate" if edge < 0.08 else "Strong"
 
     return {
         "ticker": ticker,

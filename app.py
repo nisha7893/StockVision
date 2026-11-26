@@ -206,7 +206,7 @@ with tab4:
     st.write("What if you had followed this model's UP/DOWN signals with Rs 10,000? "
              "The model is trained on the first 80% of the data and tested on the last 20%, "
              "which it has never seen. A 0.1% cost is charged on every buy and sell.")
-    thr = st.slider("Sell only if the predicted drop is bigger than (%)", 0.0, 1.0, 0.0, 0.05)
+    thr = st.slider("Sell only if DOWN probability is above 50% by (points)", 0.0, 10.0, 0.0, 0.5)
     if st.button("Run backtest", type="primary"):
         try:
             with st.spinner("Running backtest..."):
